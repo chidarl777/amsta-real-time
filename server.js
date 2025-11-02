@@ -6,49 +6,59 @@ const { Server } = require("socket.io");
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // ✅ So Express can read JSON body
+app.use(express.json());
 
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
-    origin: "*", // You can replace with your frontend URL
-    methods: ["GET", "POST"]
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+// Store connected users (user_id → socket.id)
+const connectedUsers = new Map();
+
+io.on("connection", (socket) => {
+  console.log("🔌 New client connected:", socket.id);
+
+  // Client (React Native) identifies itself
+  socket.on("joinUser", (userId) => {
+    console.log(`👤 User ${userId} joined`);
+    connectedUsers.set(userId, socket.id);
+  });
+
+  // Handle disconnection
+  socket.on("disconnect", () => {
+    console.log("❌ Client disconnected:", socket.id);
+    connectedUsers.forEach((value, key) => {
+      if (value === socket.id) connectedUsers.delete(key);
+    });
+  });
+});
+
+// ✅ Endpoint called from PHP after successful payment
+app.post("/notify", (req, res) => {
+  const { receiver_id, sender, amount } = req.body;
+  console.log("💰 Notify request received:", req.body);
+
+  if (!receiver_id || !amount || !sender) {
+    return res.status(400).json({ message: "Missing fields" });
+  }
+
+  // Find connected user
+  const receiverSocket = connectedUsers.get(receiver_id);
+  if (receiverSocket) {
+    io.to(receiverSocket).emit("creditAlert", { sender, amount });
+    console.log(`✅ Credit alert sent to user ${receiver_id}`);
+    return res.json({ message: "Credit alert sent successfully" });
+  } else {
+    console.log(`⚠️ User ${receiver_id} not connected`);
+    return res.status(404).json({ message: "User not connected" });
   }
 });
 
-// ===== SOCKET.IO EVENTS =====
-io.on("connection", (socket) => {
-  console.log("New client connected:", socket.id);
-
-  // Example: receive message from client
-  socket.on("sendMessage", (data) => {
-    console.log("Message from client:", data);
-    io.emit("receiveMessage", data); // broadcast to all
-  });
-
-  socket.on("disconnect", () => {
-    console.log("Client disconnected:", socket.id);
-  });
-});
-
-// ===== HTTP ENDPOINT for PHP =====
-app.post("/notify", (req, res) => {
-  const data = req.body;
-  console.log("Notification from PHP:", data);
-
-  // Emit to all connected Socket.IO clients
-  io.emit("creditAlert", data);
-
-  res.json({ success: true, message: "Notification sent to all clients" });
-});
-
-// ===== TEST ROUTE =====
-app.get("/", (req, res) => {
-  res.send("Socket.IO Server is Running ✅");
-});
-
-// ===== START SERVER =====
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`🚀 Socket.IO server running on port ${PORT}`);
+server.listen(3000, () => {
+  console.log("✅ Socket.IO server running on port 3000");
 });
